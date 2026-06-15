@@ -1,5 +1,6 @@
 import asyncio
 import os
+import datetime
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -16,6 +17,7 @@ intents.message_content = True
 class MyBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix="!", intents=intents)
+        self.active_timers = []
 
     async def setup_hook(self):
         # 起動時にスラッシュコマンドをDiscordに同期します
@@ -64,17 +66,53 @@ async def timer(interaction: discord.Interaction, minutes: float, title: str):
     # 即座にタイマーを受け付けた旨を応答します
     await interaction.response.send_message(f"タイマーを設定しました: {title} ({minutes}分後)", ephemeral=True)
 
-    # 待機処理（分から秒へ変換）
-    seconds = minutes * 60
-    await asyncio.sleep(seconds)
+    # タイマー情報を登録
+    end_time = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=minutes)
+    timer_info = {
+        "user_id": interaction.user.id,
+        "user_name": interaction.user.name,
+        "title": title,
+        "end_time": end_time,
+        "channel_id": interaction.channel_id
+    }
+    bot.active_timers.append(timer_info)
 
-    # 指定時間経過後にメンション付きでメッセージを送信します
-    user_mention = interaction.user.mention
-    if interaction.channel:
-        await interaction.channel.send(f"{user_mention} 時間になりました！\nタイトル: {title}")
-    else:
-        # チャンネル情報が取得できない場合のフォールバック処理
-        await interaction.followup.send(f"{user_mention} 時間になりました！\nタイトル: {title}")
+    try:
+        # 待機処理（分から秒へ変換）
+        seconds = minutes * 60
+        await asyncio.sleep(seconds)
+
+        # 指定時間経過後にメンション付きでメッセージを送信します
+        user_mention = interaction.user.mention
+        if interaction.channel:
+            await interaction.channel.send(f"{user_mention} 時間になりました！\nタイトル: {title}")
+        else:
+            # チャンネル情報が取得できない場合のフォールバック処理
+            await interaction.followup.send(f"{user_mention} 時間になりました！\nタイトル: {title}")
+    finally:
+        # 終了時にリストから削除
+        if timer_info in bot.active_timers:
+            bot.active_timers.remove(timer_info)
+
+# スラッシュコマンド /timer_status の実装
+@bot.tree.command(name="timer_status", description="実行中のタイマーの残り時間を確認します。")
+async def timer_status(interaction: discord.Interaction):
+    if not bot.active_timers:
+        await interaction.response.send_message("現在実行中のタイマーはありません。", ephemeral=True)
+        return
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    lines = ["現在実行中のタイマー一覧:"]
+    for i, t in enumerate(bot.active_timers, 1):
+        remaining = t["end_time"] - now
+        remaining_seconds = remaining.total_seconds()
+        if remaining_seconds < 0:
+            remaining_seconds = 0
+        remaining_minutes = remaining_seconds / 60
+        
+        lines.append(f"{i}. タイトル: {t['title']} | 設定者: {t['user_name']} | 残り時間: {remaining_minutes:.2f}分")
+
+    await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
 def main():
     token = os.getenv("DISCORD_BOT_TOKEN")
